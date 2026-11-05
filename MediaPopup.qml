@@ -58,6 +58,10 @@ PanelWindow {
     : (anchorWindow ? anchorWindow.width : 0)
   readonly property real barH: bar && bar.vertical
     ? (anchorWindow ? anchorWindow.height : 0) : barThickness
+  // If the bar window already spans the screen, itemPosition() is already
+  // screen-relative and must not have the bar offset added a second time.
+  readonly property bool barWindowSpansScreen: !!(bar && anchorWindow && screenW > 0 && screenH > 0
+    && (bar.vertical ? anchorWindow.width >= screenW - 1 : anchorWindow.height >= screenH - 1))
 
   // Position of the owning widget inside the bar window. The layer surface is
   // re-anchored when the popup opens and whenever the widget resizes, since
@@ -82,11 +86,11 @@ PanelWindow {
   // Layer surfaces are positioned relative to their output, so translate the
   // bar window's local coordinates into screen-relative ones.
   readonly property real barOffsetX: {
-    if (!bar || !anchorWindow) return 0
+    if (!bar || !anchorWindow || barWindowSpansScreen) return 0
     return bar.position === "right" ? Math.max(0, screenW - barW) : 0
   }
   readonly property real barOffsetY: {
-    if (!bar || !anchorWindow) return 0
+    if (!bar || !anchorWindow || barWindowSpansScreen) return 0
     return bar.position === "bottom" ? Math.max(0, screenH - barH) : 0
   }
   readonly property real anchorScreenX: anchorPoint.x + barOffsetX
