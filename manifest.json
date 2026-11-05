@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.tarik-lotfy.liquid-media",
+  "name": "Liquid Media",
+  "version": "1.0.0",
+  "author": "Tarik Lotfy",
+  "description": "Liquid-glass now-playing popup with synced lyrics, per-song volume, and playback controls.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Liquid Media",
+    "description": "Liquid-glass now-playing with synced lyrics and per-song volume",
+    "category": "Media",
+    "defaultSection": "right",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.media"
+  }
+}
