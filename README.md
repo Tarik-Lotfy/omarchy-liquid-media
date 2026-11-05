@@ -4,6 +4,7 @@ A liquid-glass now-playing popup for the Omarchy bar. It replaces the stock medi
 widget with a compact, pinned player that shows album art, synchronized lyrics,
 a seek bar, transport controls, and per-song volume.
 
+![Liquid Media](preview.png)
 
 ## Features
 
