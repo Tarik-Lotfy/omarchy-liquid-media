@@ -49,8 +49,15 @@ PanelWindow {
   readonly property bool containsMouse: cardHover.hovered
   readonly property real screenW: popupScreen ? popupScreen.width : 0
   readonly property real screenH: popupScreen ? popupScreen.height : 0
-  readonly property real barW: anchorWindow ? anchorWindow.width : 0
-  readonly property real barH: anchorWindow ? anchorWindow.height : 0
+  // The bar window can expand to host menus or panels. Use the configured bar
+  // thickness instead, otherwise the popup's available height collapses to its
+  // minimum while the bar window is full-screen.
+  readonly property real barThickness: bar && bar.barSize > 0 ? bar.barSize
+    : (anchorWindow ? (bar && bar.vertical ? anchorWindow.width : anchorWindow.height) : 0)
+  readonly property real barW: bar && bar.vertical ? barThickness
+    : (anchorWindow ? anchorWindow.width : 0)
+  readonly property real barH: bar && bar.vertical
+    ? (anchorWindow ? anchorWindow.height : 0) : barThickness
 
   // Position of the owning widget inside the bar window. The layer surface is
   // re-anchored when the popup opens and whenever the widget resizes, since

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.tarik-lotfy.liquid-media",
   "name": "Liquid Media",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Tarik Lotfy",
   "description": "Liquid-glass now-playing popup with synced lyrics, per-song volume, and playback controls.",
   "kinds": [
