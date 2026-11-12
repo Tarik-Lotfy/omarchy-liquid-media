@@ -32,6 +32,8 @@ All notable changes to this plugin are documented here. The format follows
 ### Fixed
 
 - Popup height and offsets stay correct when the bar window spans the screen.
+- The bar progress line keeps advancing while the popup is closed instead of
+  freezing until it opens.
 
 ## [1.0.2] - 2026-11-05
 

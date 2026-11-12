@@ -815,7 +815,9 @@ BarWidget {
     id: positionClock
     interval: 500
     repeat: true
-    running: root.popupOpen && root.activePlayer !== null && root.activePlayer.isPlaying
+    // Runs whenever something is playing, not only while the popup is open,
+    // so the bar's progress line keeps advancing while the popup is closed.
+    running: root.activePlayer !== null && root.activePlayer.isPlaying
     onTriggered: root.updatePosition()
   }
 
@@ -823,7 +825,9 @@ BarWidget {
     id: positionResync
     interval: 5000
     repeat: true
-    running: root.popupOpen && root.activePlayer !== null && root.activePlayer.isPlaying
+    // Same reason as positionClock: the anchor drifts while closed, and some
+    // players (Spotify) never publish Position on their own.
+    running: root.activePlayer !== null && root.activePlayer.isPlaying
     onTriggered: root.pollPosition()
   }
 
