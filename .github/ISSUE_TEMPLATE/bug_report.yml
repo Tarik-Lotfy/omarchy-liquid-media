@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a problem with Liquid Media
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please include enough
+        detail to reproduce it.
+
+  - type: input
+    id: version
+    attributes:
+      label: Liquid Media version
+      description: Run `jq -r .version ~/.config/omarchy/plugins/io.github.tarik-lotfy.liquid-media/manifest.json`
+      placeholder: "1.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: omarchy
+    attributes:
+      label: Omarchy version
+      description: Run `omarchy version`
+      placeholder: "4.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: player
+    attributes:
+      label: Media player
+      description: Which player was active? Include the MPRIS name if you know it.
+      placeholder: "Spotify, Firefox, mpv, ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the popup
+        2. Click the expand button
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste any QML errors from the shell log.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I am running the latest release.
+          required: true
+        - label: I searched existing issues before opening this one.
+          required: true

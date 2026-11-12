@@ -43,7 +43,11 @@ PanelWindow {
   }
 
   readonly property int borderWidth: Math.max(1, Math.round(Style.space(1)))
-  readonly property var coordinatorKey: owner || root
+  // The bar underlines the widget whose popout it thinks is open. Use this
+  // overlay itself as the coordinator key so the bar still closes other
+  // popouts (and they close this one), but the yellow open-panel mark stays
+  // off: the widget's own progress line turns accent-colored instead.
+  readonly property var coordinatorKey: root
   readonly property var anchorWindow: anchorItem ? anchorItem.QsWindow.window : null
   readonly property var popupScreen: anchorWindow ? anchorWindow.screen : null
   readonly property bool containsMouse: cardHover.hovered

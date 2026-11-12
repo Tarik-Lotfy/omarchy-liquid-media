@@ -295,6 +295,32 @@ Item {
     return true
   }
 
+  readonly property bool shuffleSupported: !!(activePlayer && activePlayer.shuffleSupported)
+  readonly property bool shuffleOn: !!(activePlayer && activePlayer.shuffle)
+  readonly property bool loopSupported: !!(activePlayer && activePlayer.loopSupported)
+  readonly property int loopState: activePlayer ? activePlayer.loopState : MprisLoopState.None
+  readonly property string loopLabel: {
+    if (!activePlayer || !activePlayer.loopSupported) return "off"
+    if (loopState === MprisLoopState.Track) return "one"
+    if (loopState === MprisLoopState.Playlist) return "all"
+    return "off"
+  }
+
+  function toggleShuffle() {
+    if (!activePlayer || !activePlayer.shuffleSupported) return false
+    activePlayer.shuffle = !activePlayer.shuffle
+    return true
+  }
+
+  function cycleLoop() {
+    if (!activePlayer || !activePlayer.loopSupported) return false
+    // Off -> repeat all -> repeat one -> off, the order most players use.
+    if (loopState === MprisLoopState.None) activePlayer.loopState = MprisLoopState.Playlist
+    else if (loopState === MprisLoopState.Playlist) activePlayer.loopState = MprisLoopState.Track
+    else activePlayer.loopState = MprisLoopState.None
+    return true
+  }
+
   function playPlayer(player) {
     if (!player) return false
     if (player.canPlay) {

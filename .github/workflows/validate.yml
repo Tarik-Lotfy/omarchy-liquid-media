@@ -1,0 +1,75 @@
+name: Validate plugin
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=manifest.json
+
+          jq -e . "$manifest" >/dev/null
+          jq -e '.schemaVersion == 1' "$manifest" >/dev/null
+
+          for field in id name version kinds entryPoints; do
+            jq -e --arg f "$field" 'has($f)' "$manifest" >/dev/null \
+              || { echo "manifest missing required field '$field'"; exit 1; }
+          done
+
+          id=$(jq -r '.id // ""' "$manifest")
+          [[ -n $id ]] || { echo "manifest id is empty"; exit 1; }
+          [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "invalid plugin id '$id'"; exit 1; }
+          [[ $id != omarchy.* ]] || { echo "plugin id uses the reserved omarchy.* namespace"; exit 1; }
+
+          jq -e '(.kinds | type) == "array" and (.kinds | length) > 0' "$manifest" >/dev/null
+          jq -e '(.entryPoints | type) == "object"' "$manifest" >/dev/null
+
+          while IFS= read -r entry; do
+            [[ -n $entry ]] || { echo "entry point path is empty"; exit 1; }
+            [[ $entry != /* ]] || { echo "entry point must be relative: '$entry'"; exit 1; }
+            [[ $entry != *".."* ]] || { echo "entry point may not contain '..': '$entry'"; exit 1; }
+            [[ -f $entry ]] || { echo "entry point file not found: '$entry'"; exit 1; }
+          done < <(jq -r '.entryPoints[]' "$manifest")
+
+          while IFS=: read -r kind key; do
+            if jq -e --arg kind "$kind" '(.kinds | index($kind)) != null' "$manifest" >/dev/null; then
+              jq -e --arg key "$key" '.entryPoints | has($key)' "$manifest" >/dev/null \
+                || { echo "kind '$kind' requires entryPoints.$key"; exit 1; }
+            fi
+          done <<'EOF'
+          bar:bar
+          bar-widget:barWidget
+          menu:menu
+          overlay:overlay
+          panel:panel
+          service:service
+          EOF
+
+          if find . -path ./.git -prune -o -type l -print -quit | grep -q .; then
+            echo "symlinks are not allowed inside a plugin folder"
+            exit 1
+          fi
+
+          echo "manifest.json is valid"
+
+      - name: Check version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(jq -r '.version' manifest.json)
+          tag=${GITHUB_REF_NAME#v}
+          [[ $version == "$tag" ]] || {
+            echo "manifest version '$version' does not match tag '$tag'"
+            exit 1
+          }

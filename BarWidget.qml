@@ -19,7 +19,34 @@ BarWidget {
   readonly property string title: activePlayer ? (activePlayer.trackTitle || "") : ""
   readonly property string artist: activePlayer ? (activePlayer.trackArtist || "") : ""
   readonly property string album: activePlayer && activePlayer.trackAlbum ? activePlayer.trackAlbum : ""
+  readonly property string artUrl: activePlayer && activePlayer.trackArtUrl ? activePlayer.trackArtUrl : ""
   readonly property real trackLength: activePlayer && activePlayer.length > 0 ? activePlayer.length : 0
+  readonly property real trackProgress: trackLength > 0
+    ? Math.max(0, Math.min(1, trackPosition / trackLength)) : 0
+
+  // Popup size and playback-mode preferences survive shell restarts. The
+  // reloadable id follows the plugin id, so a personal clone and the published
+  // plugin keep independent state.
+  PersistentProperties {
+    id: prefs
+    reloadableId: root.moduleName
+    property bool expanded: false
+  }
+  readonly property bool expanded: prefs.expanded
+
+  readonly property bool hasMultipleSources: sourcePlayers.length > 1
+  readonly property int activeSourceIndex: {
+    if (!mediaService || !activePlayer) return -1
+    var key = mediaService.playerKey(activePlayer)
+    for (var i = 0; i < sourcePlayers.length; i++) {
+      if (mediaService.playerKey(sourcePlayers[i]) === key) return i
+    }
+    return -1
+  }
+  readonly property bool shuffleSupported: !!(mediaService && mediaService.shuffleSupported)
+  readonly property bool shuffleOn: !!(mediaService && mediaService.shuffleOn)
+  readonly property bool loopSupported: !!(mediaService && mediaService.loopSupported)
+  readonly property string loopLabel: mediaService ? mediaService.loopLabel : "off"
 
   // MPRIS players such as Spotify never emit Position updates while playing,
   // so activePlayer.position goes stale. Keep a local clock anchored to the
@@ -42,7 +69,7 @@ BarWidget {
     : (hasMprisVolume && activePlayer ? activePlayer.volume <= 0.001 : false)
 
   property bool popupOpen: false
-  property real maxLabelWidth: 180
+  property real maxLabelWidth: 104
 
   // Lyrics are fetched from LRCLIB (free, no API key) when the popup opens.
   // When LRCLIB has nothing, fall back to Genius (plain lyrics only).
@@ -67,6 +94,22 @@ BarWidget {
   property real seekValue: 0
 
   function close() { popupOpen = false }
+
+  function toggleExpanded() {
+    prefs.expanded = !prefs.expanded
+  }
+
+  function cycleSource() {
+    if (mediaService) mediaService.switchSource(1, false, false)
+  }
+
+  function toggleShuffle() {
+    if (mediaService) mediaService.toggleShuffle()
+  }
+
+  function cycleLoop() {
+    if (mediaService) mediaService.cycleLoop()
+  }
 
   function formatTime(seconds) {
     var value = Number(seconds)
@@ -549,6 +592,50 @@ BarWidget {
       Qt.callLater(root.refreshLyricIndex)
     }
   }
+  onExpandedChanged: Qt.callLater(root.positionLyrics)
+
+  // Small scripting surface for keybindings and for opening the player
+  // without simulating a mouse click on the bar.
+  IpcHandler {
+    target: "liquid-media"
+
+    function open(): string { root.popupOpen = true; return "ok" }
+    function close(): string { root.popupOpen = false; return "ok" }
+    function toggle(): string {
+      root.popupOpen = !root.popupOpen
+      return root.popupOpen ? "open" : "closed"
+    }
+    function expand(): string { prefs.expanded = true; return "expanded" }
+    function collapse(): string { prefs.expanded = false; return "compact" }
+    function toggleSize(): string {
+      prefs.expanded = !prefs.expanded
+      return prefs.expanded ? "expanded" : "compact"
+    }
+    function shuffle(): string {
+      root.toggleShuffle()
+      return root.shuffleOn ? "on" : "off"
+    }
+    function loop(): string {
+      root.cycleLoop()
+      return root.loopLabel
+    }
+    function source(): string {
+      root.cycleSource()
+      return String(root.activeSourceIndex)
+    }
+    function status(): string {
+      return JSON.stringify({
+        open: root.popupOpen,
+        expanded: prefs.expanded,
+        title: root.title,
+        artist: root.artist,
+        source: root.activeSourceIndex,
+        sources: root.sourcePlayers.length,
+        shuffle: root.shuffleOn,
+        loop: root.loopLabel
+      })
+    }
+  }
 
   visible: hasMedia
   implicitWidth: hasMedia ? row.implicitWidth + Style.space(14) : 0
@@ -573,6 +660,24 @@ BarWidget {
       }
     }
 
+    Rectangle {
+      id: barArt
+      width: root.artUrl !== "" && !root.bar.vertical ? Style.space(16) : 0
+      height: width
+      radius: Math.max(1, Style.space(3))
+      color: Style.normalFillFor(root.bar.foreground, Commons.Color.accent)
+      visible: width > 0
+      anchors.verticalCenter: parent.verticalCenter
+      clip: true
+
+      Image {
+        anchors.fill: parent
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        source: root.artUrl
+      }
+    }
+
     Item {
       id: scrollClip
       width: Math.min(root.maxLabelWidth, labelText.implicitWidth)
@@ -581,34 +686,89 @@ BarWidget {
       anchors.verticalCenter: parent.verticalCenter
       visible: !root.bar.vertical && root.title !== ""
 
-      Text {
-        id: labelText
-        textFormat: Text.PlainText
-        text: root.title + (root.artist ? "  ·  " + root.artist : "")
-        color: root.bar.barForeground
-        font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.body
-        anchors.verticalCenter: parent.verticalCenter
+      // Space between the label and its repeat. The duplicate copy lets the
+      // marquee wrap without a visible jump or a blank stretch.
+      readonly property real marqueeGap: Style.space(24)
 
-        property bool needsScroll: implicitWidth > scrollClip.width
+      Item {
+        id: marqueeTrack
+        width: labelText.implicitWidth * 2 + scrollClip.marqueeGap
+        height: parent.height
+        x: 0
+
+        Text {
+          id: labelText
+          textFormat: Text.PlainText
+          text: root.title + (root.artist ? "  ·  " + root.artist : "")
+          color: root.bar.barForeground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.body
+          anchors.verticalCenter: parent.verticalCenter
+
+          property bool needsScroll: implicitWidth > scrollClip.width
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          text: labelText.text
+          color: labelText.color
+          font.family: labelText.font.family
+          font.pixelSize: labelText.font.pixelSize
+          anchors.verticalCenter: parent.verticalCenter
+          x: labelText.implicitWidth + scrollClip.marqueeGap
+          visible: labelText.needsScroll
+        }
 
         NumberAnimation on x {
           id: scrollAnim
           running: labelText.needsScroll && !root.popupOpen && !root.bar.vertical
           loops: Animation.Infinite
-          duration: Math.max(6000, labelText.implicitWidth * 25)
+          // ~20 px/s, slow enough to read a long title without rushing.
+          duration: Math.max(8000, (labelText.implicitWidth + scrollClip.marqueeGap) * 50)
           // Start visible instead of off the right edge, so the song name is
           // readable the moment the popup closes (or the track changes).
           from: 0
-          to: scrollClip.width - labelText.implicitWidth
+          to: -(labelText.implicitWidth + scrollClip.marqueeGap)
           easing.type: Easing.Linear
 
           // When scrolling stops (popup opens, or the title gets short enough
           // to fit), snap back to the start instead of staying mid-scroll.
-          onRunningChanged: if (!running) labelText.x = 0
+          onRunningChanged: if (!running) marqueeTrack.x = 0
         }
       }
     }
+  }
+
+  // A hairline progress bar makes the widget readable at a glance without
+  // taking any vertical room away from the label. While the popup is open it
+  // shifts to the accent color instead of the bar's open-panel underline,
+  // which would otherwise collide with it.
+  Rectangle {
+    id: barProgressTrack
+    anchors.bottom: parent.bottom
+    anchors.bottomMargin: Math.max(0, Math.round(Style.space(1)))
+    anchors.horizontalCenter: parent.horizontalCenter
+    width: row.width
+    height: Math.max(1, Math.round(Style.space(1)))
+    radius: height / 2
+    color: root.popupOpen ? Commons.Color.accent : root.bar.barForeground
+    opacity: root.popupOpen ? 0.34 : 0.16
+    visible: root.hasMedia && (root.trackLength > 0 || root.popupOpen) && !root.bar.vertical
+    Behavior on color { ColorAnimation { duration: 160 } }
+    Behavior on opacity { NumberAnimation { duration: 160 } }
+  }
+
+  Rectangle {
+    anchors.left: barProgressTrack.left
+    anchors.bottom: barProgressTrack.bottom
+    width: barProgressTrack.width * (root.trackLength > 0 ? root.trackProgress : (root.popupOpen ? 1 : 0))
+    height: barProgressTrack.height
+    radius: height / 2
+    color: root.popupOpen ? Commons.Color.accent : root.bar.barForeground
+    opacity: root.popupOpen ? 1.0 : 0.72
+    visible: barProgressTrack.visible
+    Behavior on color { ColorAnimation { duration: 160 } }
+    Behavior on opacity { NumberAnimation { duration: 160 } }
   }
 
   MouseArea {
@@ -621,9 +781,9 @@ BarWidget {
       if (!root.activePlayer) return
       if (mouse.button === Qt.MiddleButton) {
         if (root.mediaService) root.mediaService.runAction("next", false)
+      } else if (mouse.button === Qt.RightButton) {
+        if (root.mediaService) root.mediaService.runAction("playPause", false)
       } else {
-        // Left and right both open the expanded player. Play/pause lives in
-        // the popup controls now.
         root.popupOpen = !root.popupOpen
       }
     }
@@ -632,7 +792,10 @@ BarWidget {
       if (wheel.angleDelta.y > 0 && root.mediaService) root.mediaService.runAction("previous", false)
       else if (wheel.angleDelta.y < 0 && root.mediaService) root.mediaService.runAction("next", false)
     }
-    onEntered: if (root.bar) root.bar.showTooltip(root, root.hasMedia ? (root.title + (root.artist ? " — " + root.artist : "")) : "")
+    onEntered: if (root.bar) root.bar.showTooltip(root, root.hasMedia
+      ? (root.title + (root.artist ? " — " + root.artist : "")
+         + (root.trackLength > 0 ? "  ·  " + root.formatTime(root.trackPosition) + " / " + root.formatTime(root.trackLength) : ""))
+      : "")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
@@ -748,8 +911,8 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    artUrl: root.activePlayer && root.activePlayer.trackArtUrl ? root.activePlayer.trackArtUrl : ""
-    contentWidth: popup.fittedContentWidth(Style.space(460))
+    artUrl: root.artUrl
+    contentWidth: popup.fittedContentWidth(Style.space(root.expanded ? 600 : 460))
     contentHeight: popup.fittedContentHeight(wideRoot.implicitHeight, Style.space(520))
 
     Column {
@@ -763,8 +926,10 @@ BarWidget {
         width: parent.width
         height: mainRow.wideTopHeight + Style.space(8) + mainRow.wideBottomHeight
 
-        readonly property real wideTopHeight: Style.space(140)
-        readonly property real wideBottomHeight: Style.space(34)
+        readonly property real wideTopHeight: root.expanded ? Style.space(260) : Style.space(140)
+        readonly property real wideBottomHeight: root.expanded ? Style.space(52) : Style.space(34)
+        readonly property real artSize: Math.min(wideTopHeight,
+          Math.max(Style.space(96), width * (root.expanded ? 0.42 : 0.4)))
 
         Column {
           id: leftStack
@@ -779,8 +944,8 @@ BarWidget {
 
             BorderSurface {
               id: wideArt
-              width: parent.height
-              height: parent.height
+              width: mainRow.artSize
+              height: mainRow.artSize
               radius: Style.spacing.labelGap
               color: Style.normalFillFor(root.bar.foreground, Commons.Color.accent)
               borderSpec: Border.controlSpec("normal", root.bar.foreground, Commons.Color.accent)
@@ -790,7 +955,7 @@ BarWidget {
                 anchors.margins: Style.space(2)
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
-                source: root.activePlayer && root.activePlayer.trackArtUrl ? root.activePlayer.trackArtUrl : ""
+                source: root.artUrl
                 visible: source !== ""
               }
 
@@ -800,7 +965,7 @@ BarWidget {
                 text: "󰝚"
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.displayLarge
+                font.pixelSize: root.expanded ? Style.font.display : Style.font.displayLarge
               }
             }
 
@@ -815,15 +980,59 @@ BarWidget {
                 width: parent.width
                 spacing: Style.space(2)
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: root.title || "Nothing playing"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.title
-                  font.bold: true
-                  elide: Text.ElideRight
+                Row {
+                  id: wideTitleRow
                   width: parent.width
+                  spacing: Style.space(6)
+
+                  Text {
+                    id: wideTitleText
+                    width: Math.max(0, parent.width
+                      - (wideSourceBadge.visible ? wideSourceBadge.width + parent.spacing : 0)
+                      - wideCloseButton.width - parent.spacing)
+                    textFormat: Text.PlainText
+                    text: root.title || "Nothing playing"
+                    color: root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: root.expanded ? Style.font.heading : Style.font.title
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Button {
+                    id: wideSourceBadge
+                    visible: root.hasMultipleSources
+                    width: Style.space(root.expanded ? 44 : 34)
+                    height: Style.space(18)
+                    text: (root.activeSourceIndex >= 0 ? root.activeSourceIndex + 1 : "?")
+                      + "/" + root.sourcePlayers.length
+                    fontSize: Style.font.caption
+                    horizontalPadding: 0
+                    verticalPadding: 0
+                    foreground: root.bar.foreground
+                    tooltipText: "Switch source"
+                    onClicked: root.cycleSource()
+                  }
+
+                  Button {
+                    id: wideCloseButton
+                    width: Style.space(root.expanded ? 20 : 18)
+                    height: width
+                    y: (wideTitleRow.height - height) / 2
+                    radius: width / 2
+                    horizontalPadding: 0
+                    verticalPadding: 0
+                    foreground: root.bar.foreground
+                    tooltipText: "Close player"
+                    onClicked: root.close()
+
+                    OpticalIcon {
+                      text: "󰅖"
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: root.expanded ? Style.font.icon : Style.font.bodySmall
+                      color: root.bar.foreground
+                    }
+                  }
                 }
 
                 Row {
@@ -937,7 +1146,9 @@ BarWidget {
                           scale: index === root.currentLyricIndex ? 1.06 : 1.0
 
                           font.family: root.bar.fontFamily
-                          font.pixelSize: index === root.currentLyricIndex ? Style.font.body : Style.font.bodySmall
+                          font.pixelSize: index === root.currentLyricIndex
+                            ? (root.expanded ? Style.font.subtitle : Style.font.body)
+                            : (root.expanded ? Style.font.body : Style.font.bodySmall)
                           font.bold: index === root.currentLyricIndex
 
                           Behavior on opacity { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
@@ -975,7 +1186,7 @@ BarWidget {
                       color: "#ffffff"
                       opacity: 0.95
                       font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.bodySmall
+                      font.pixelSize: root.expanded ? Style.font.body : Style.font.bodySmall
                       lineHeight: 1.25
                       horizontalAlignment: Text.AlignHCenter
                     }
@@ -993,85 +1204,157 @@ BarWidget {
             // Transport sits centered under the album art.
             Item {
               id: wideTransportSlot
-              width: wideArt.width
+              width: Math.max(wideArt.width, wideTransport.implicitWidth)
               height: parent.height
               anchors.left: parent.left
 
               Row {
                 id: wideTransport
                 anchors.centerIn: parent
-                spacing: Style.space(4)
+                spacing: root.expanded ? Style.space(8) : Style.space(2)
 
-                readonly property real controlSize: Style.space(30)
-                readonly property real controlIconSize: Style.font.iconLarge
+                readonly property real sideSize: root.expanded ? Style.space(30) : Style.space(22)
+                readonly property real mainSize: root.expanded ? Style.space(34) : Style.space(26)
+                readonly property real playSize: root.expanded ? Style.space(42) : Style.space(30)
+                readonly property real sideIconSize: root.expanded ? Style.font.iconLarge : Style.font.iconSmall
+                readonly property real mainIconSize: root.expanded ? Style.font.display : Style.font.iconLarge
 
                 Button {
-                  iconText: ""
-                  width: wideTransport.controlSize
-                  height: wideTransport.controlSize
+                  width: wideTransport.sideSize
+                  height: wideTransport.sideSize
+                  y: (wideTransport.height - height) / 2
+                  radius: width / 2
+                  horizontalPadding: 0
+                  verticalPadding: 0
+                  foreground: root.bar.foreground
+                  selected: root.shuffleOn
+                  enabled: root.shuffleSupported
+                  opacity: enabled ? (root.shuffleOn ? 1.0 : 0.65) : 0.25
+                  tooltipText: root.shuffleSupported ? (root.shuffleOn ? "Shuffle on" : "Shuffle off") : "Shuffle unavailable"
+                  onClicked: root.toggleShuffle()
+
+                  OpticalIcon {
+                    text: "󰒝"
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: wideTransport.sideIconSize
+                    color: root.shuffleOn ? Style.selectedStateColor(root.bar.foreground, Commons.Color.accent) : root.bar.foreground
+                  }
+                }
+
+                Button {
+                  width: wideTransport.mainSize
+                  height: wideTransport.mainSize
+                  y: (wideTransport.height - height) / 2
                   radius: width / 2
                   horizontalPadding: 0
                   verticalPadding: 0
                   foreground: root.bar.foreground
                   enabled: root.activePlayer && root.activePlayer.canGoPrevious
                   opacity: enabled ? 1.0 : 0.4
+                  tooltipText: "Previous"
                   onClicked: if (root.mediaService) root.mediaService.runAction("previous", false, root.mediaService.playerKey(root.activePlayer))
 
-                  Text {
-                    anchors.centerIn: parent
-                    anchors.horizontalCenterOffset: Style.space(0.75)
-                    anchors.verticalCenterOffset: Style.space(0.75)
+                  OpticalIcon {
                     text: "󰙤" // skip-previous-circle-outline
-                    color: root.bar.foreground
                     font.family: root.bar.fontFamily
-                    font.pixelSize: wideTransport.controlIconSize
+                    font.pixelSize: wideTransport.mainIconSize
+                    color: root.bar.foreground
                   }
                 }
 
                 Button {
-                  iconText: ""
-                  width: wideTransport.controlSize
-                  height: wideTransport.controlSize
+                  width: wideTransport.playSize
+                  height: wideTransport.playSize
+                  y: (wideTransport.height - height) / 2
                   radius: width / 2
                   horizontalPadding: 0
                   verticalPadding: 0
                   foreground: root.bar.foreground
                   enabled: root.activePlayer && (root.activePlayer.canTogglePlaying || root.activePlayer.canPlay || root.activePlayer.canPause)
                   opacity: enabled ? 1.0 : 0.4
+                  tooltipText: root.activePlayer && root.activePlayer.isPlaying ? "Pause" : "Play"
                   onClicked: if (root.mediaService) root.mediaService.runAction("playPause", false, root.mediaService.playerKey(root.activePlayer))
 
-                  Text {
-                    anchors.centerIn: parent
-                    anchors.horizontalCenterOffset: Style.space(0.75)
-                    anchors.verticalCenterOffset: Style.space(0.75)
+                  OpticalIcon {
                     text: root.activePlayer && root.activePlayer.isPlaying ? "󰏦" : "󰐍"
-                    color: root.bar.foreground
                     font.family: root.bar.fontFamily
-                    font.pixelSize: wideTransport.controlIconSize
+                    font.pixelSize: wideTransport.mainIconSize
+                    color: root.bar.foreground
                   }
                 }
 
                 Button {
-                  iconText: ""
-                  width: wideTransport.controlSize
-                  height: wideTransport.controlSize
+                  width: wideTransport.mainSize
+                  height: wideTransport.mainSize
+                  y: (wideTransport.height - height) / 2
                   radius: width / 2
                   horizontalPadding: 0
                   verticalPadding: 0
                   foreground: root.bar.foreground
                   enabled: root.activePlayer && root.activePlayer.canGoNext
                   opacity: enabled ? 1.0 : 0.4
+                  tooltipText: "Next"
                   onClicked: if (root.mediaService) root.mediaService.runAction("next", false, root.mediaService.playerKey(root.activePlayer))
 
-                  Text {
-                    anchors.centerIn: parent
-                    anchors.horizontalCenterOffset: Style.space(0.75)
-                    anchors.verticalCenterOffset: Style.space(0.75)
+                  OpticalIcon {
                     text: "󰙢" // skip-next-circle-outline
-                    color: root.bar.foreground
                     font.family: root.bar.fontFamily
-                    font.pixelSize: wideTransport.controlIconSize
+                    font.pixelSize: wideTransport.mainIconSize
+                    color: root.bar.foreground
                   }
+                }
+
+                Button {
+                  width: wideTransport.sideSize
+                  height: wideTransport.sideSize
+                  y: (wideTransport.height - height) / 2
+                  radius: width / 2
+                  horizontalPadding: 0
+                  verticalPadding: 0
+                  foreground: root.bar.foreground
+                  selected: root.loopLabel !== "off"
+                  enabled: root.loopSupported
+                  opacity: enabled ? (root.loopLabel !== "off" ? 1.0 : 0.65) : 0.25
+                  tooltipText: !root.loopSupported ? "Repeat unavailable"
+                    : (root.loopLabel === "one" ? "Repeat one" : (root.loopLabel === "all" ? "Repeat all" : "Repeat off"))
+                  onClicked: root.cycleLoop()
+
+                  OpticalIcon {
+                    text: root.loopLabel === "one" ? "󰑘" : "󰑖"
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: wideTransport.sideIconSize
+                    color: root.loopLabel !== "off" ? Style.selectedStateColor(root.bar.foreground, Commons.Color.accent) : root.bar.foreground
+                  }
+                }
+              }
+            }
+
+            // Expand/collapse stays pinned to the bottom-right corner so it
+            // does not take space away from the lyrics. Close lives in the
+            // title row at the top-right of the popup.
+            Row {
+              id: wideBottomActions
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              readonly property real controlSize: root.expanded ? Style.space(24) : Style.space(20)
+
+              Button {
+                width: wideBottomActions.controlSize
+                height: width
+                radius: width / 2
+                horizontalPadding: 0
+                verticalPadding: 0
+                foreground: root.bar.foreground
+                tooltipText: root.expanded ? "Collapse player" : "Expand player"
+                onClicked: root.toggleExpanded()
+
+                OpticalIcon {
+                  text: root.expanded ? "󰅃" : "󰅀"
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: root.expanded ? Style.font.icon : Style.font.bodySmall
+                  color: root.bar.foreground
                 }
               }
             }
@@ -1081,7 +1364,8 @@ BarWidget {
               id: wideSeekSlot
               anchors.left: wideTransportSlot.right
               anchors.leftMargin: wideTopRow.spacing
-              anchors.right: parent.right
+              anchors.right: wideBottomActions.left
+              anchors.rightMargin: Style.space(6)
               anchors.top: parent.top
               anchors.bottom: parent.bottom
 
@@ -1137,7 +1421,7 @@ BarWidget {
 
         Column {
           id: volumeColumn
-          width: Style.space(34)
+          width: root.expanded ? Style.space(40) : Style.space(34)
           height: parent.height
           spacing: Style.space(4)
 
@@ -1244,13 +1528,13 @@ BarWidget {
 
       PanelSeparator {
         width: parent.width
-        visible: root.sourcePlayers.length > 1
+        visible: root.expanded && root.sourcePlayers.length > 1
         foreground: root.bar.foreground
       }
 
       Column {
         id: wideSourceList
-        visible: root.sourcePlayers.length > 1
+        visible: root.expanded && root.sourcePlayers.length > 1
         width: parent.width
         spacing: Style.space(4)
 
