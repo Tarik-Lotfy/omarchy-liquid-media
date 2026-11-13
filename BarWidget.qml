@@ -85,6 +85,16 @@ BarWidget {
   property string queuedLyricsKey: ""
   property string geniusKey: ""
   property var lyricsCache: ({})
+  // Lyrics responses are untrusted. Bound what we keep so a hostile or broken
+  // response cannot grow shell memory: a fixed number of cached tracks, a
+  // fixed number of lyric rows, and a fixed plain-text length.
+  readonly property int lyricsCacheLimit: 32
+  readonly property int lyricsLineLimit: 300
+  readonly property int lyricsPlainLimit: 20000
+  readonly property int lyricsBytesLimit: 1048576
+  readonly property int geniusSearchBytesLimit: 262144
+  readonly property int geniusPageBytesLimit: 3145728
+  property var lyricsCacheOrder: []
   property int currentLyricIndex: -1
   property bool lyricsScrolled: false
 
@@ -214,17 +224,33 @@ BarWidget {
     currentLyricIndex = -1
     pendingLyricsKey = key
 
-    lyricsProc.command = ["curl", "-fsS", "--max-time", "8", "-H",
-      "User-Agent: OmarchyMediaWidget/1.0", lyricsUrl()]
+    lyricsProc.command = ["curl", "-fsS", "--proto", "=https", "--max-time", "8",
+      "--max-filesize", String(lyricsBytesLimit),
+      "-H", "User-Agent: OmarchyMediaWidget/1.0", lyricsUrl()]
     lyricsStart.restart()
+  }
+
+  // Insertion-ordered cache with a hard cap, so a long listening session
+  // cannot keep every track's lyrics in memory forever.
+  function cacheLyrics(key, entry) {
+    if (!key) return
+    if (!lyricsCache[key]) lyricsCacheOrder.push(key)
+    lyricsCache[key] = entry
+    while (lyricsCacheOrder.length > lyricsCacheLimit) {
+      var oldest = lyricsCacheOrder.shift()
+      delete lyricsCache[oldest]
+    }
   }
 
   function applyCache(entry) {
     lyricsLoading = false
+    // Idle memory: nothing is rendered while the popup is closed. Cached
+    // entries are reapplied when it opens again.
+    if (!popupOpen) return
     lyricsSynced = entry.synced === true
     lyricsInstrumental = entry.instrumental === true
-    lyricsLines = entry.lines || []
-    lyricsPlain = entry.plain || ""
+    lyricsLines = (entry.lines || []).slice(0, lyricsLineLimit)
+    lyricsPlain = String(entry.plain || "").slice(0, lyricsPlainLimit)
     lyricsError = entry.error || ""
     lyricsSource = entry.source || ""
     lyricsScrolled = false
@@ -235,13 +261,14 @@ BarWidget {
   function pickLyrics(data) {
     if (!data) return null
     var list = Array.isArray(data) ? data : [data]
+    var count = Math.min(list.length, 50)
     var synced = null
     var syncedScore = Infinity
     var plain = null
     var plainScore = Infinity
     var instrumental = null
 
-    for (var i = 0; i < list.length; i++) {
+    for (var i = 0; i < count; i++) {
       var item = list[i]
       if (!item) continue
 
@@ -266,10 +293,12 @@ BarWidget {
 
   function parseLrc(text) {
     var lines = []
-    var rows = String(text || "").split("\n")
+    var rows = String(text || "").slice(0, lyricsBytesLimit).split("\n")
+    // Cap both the rows we scan and the lines we keep.
+    var rowLimit = Math.min(rows.length, 2000)
     var stamp = /\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]/g
 
-    for (var i = 0; i < rows.length; i++) {
+    for (var i = 0; i < rowLimit && lines.length < lyricsLineLimit; i++) {
       var row = rows[i]
       var times = []
       var match
@@ -282,7 +311,9 @@ BarWidget {
       if (times.length === 0) continue
 
       var content = row.replace(/\[[^\]]*\]/g, "").trim()
-      for (var j = 0; j < times.length; j++) lines.push({ t: times[j], text: content })
+      for (var j = 0; j < times.length && lines.length < lyricsLineLimit; j++) {
+        lines.push({ t: times[j], text: content })
+      }
     }
 
     lines.sort(function(a, b) { return a.t - b.t })
@@ -306,7 +337,7 @@ BarWidget {
     lyricsLoading = false
 
     if (candidate.instrumental === true) {
-      lyricsCache[pendingLyricsKey] = { instrumental: true }
+      cacheLyrics(pendingLyricsKey, { instrumental: true })
       if (pendingLyricsKey === trackKey()) applyCache({ instrumental: true })
       return
     }
@@ -316,13 +347,15 @@ BarWidget {
       entry.lines = parseLrc(candidate.syncedLyrics)
       entry.synced = entry.lines.length > 0
     }
-    if (!entry.synced && candidate.plainLyrics) entry.plain = String(candidate.plainLyrics).trim()
+    if (!entry.synced && candidate.plainLyrics) {
+      entry.plain = String(candidate.plainLyrics).trim().slice(0, lyricsPlainLimit)
+    }
 
     if (!entry.synced && entry.plain === "") {
       entry.error = "No lyrics found"
     }
 
-    lyricsCache[pendingLyricsKey] = entry
+    cacheLyrics(pendingLyricsKey, entry)
     if (pendingLyricsKey === trackKey()) applyCache(entry)
   }
 
@@ -343,10 +376,26 @@ BarWidget {
     geniusKey = pendingLyricsKey
     lyricsSource = ""
 
-    geniusSearchProc.command = ["curl", "-fsS", "--max-time", "8", "-H",
-      "User-Agent: OmarchyMediaWidget/1.0", "-H", "Accept: application/json",
+    geniusSearchProc.command = ["curl", "-fsS", "--proto", "=https", "--max-time", "8",
+      "--max-filesize", String(geniusSearchBytesLimit),
+      "-H", "User-Agent: OmarchyMediaWidget/1.0", "-H", "Accept: application/json",
       "https://genius.com/api/search/song?q=" + encodeURIComponent(title + " " + artist)]
     geniusSearchProc.running = true
+  }
+
+  // Genius search results are untrusted input. Only accept an https URL on
+  // genius.com, and never follow redirects: the page is fetched from exactly
+  // the URL we validated, so a crafted result cannot point curl at another
+  // host or a private-network address.
+  function trustedGeniusUrl(value) {
+    var url = String(value || "")
+    var match = /^https:\/\/([^\/?#]+)(?:[\/?#]|$)/i.exec(url)
+    if (!match) return ""
+    var host = match[1].toLowerCase()
+    var colon = host.indexOf(":")
+    if (colon >= 0) host = host.slice(0, colon)
+    if (host === "genius.com" || host.endsWith(".genius.com")) return url
+    return ""
   }
 
   function geniusTokens(value) {
@@ -401,18 +450,21 @@ BarWidget {
     if (!lyricsLoading || geniusKey !== pendingLyricsKey) return
 
     var data = null
-    if (String(raw || "").trim() !== "") {
-      try { data = JSON.parse(String(raw).trim()) } catch (e) { data = null }
+    var body = String(raw || "").trim().slice(0, geniusSearchBytesLimit)
+    if (body !== "") {
+      try { data = JSON.parse(body) } catch (e) { data = null }
     }
 
     var hit = pickGeniusHit(data)
-    if (!hit) {
+    var pageUrl = hit ? trustedGeniusUrl(hit.url) : ""
+    if (pageUrl === "") {
       geniusNoLyrics()
       return
     }
 
-    geniusPageProc.command = ["curl", "-fLsS", "--max-time", "12", "-H",
-      "User-Agent: OmarchyMediaWidget/1.0", String(hit.url)]
+    geniusPageProc.command = ["curl", "-fsS", "--proto", "=https", "--max-time", "12",
+      "--max-filesize", String(geniusPageBytesLimit),
+      "-H", "User-Agent: OmarchyMediaWidget/1.0", pageUrl]
     geniusPageProc.running = true
   }
 
@@ -459,11 +511,13 @@ BarWidget {
 
   function parseGeniusLyrics(page) {
     if (!page) return ""
+    page = String(page).slice(0, geniusPageBytesLimit)
 
     var marker = 'data-lyrics-container="true"'
     var chunks = []
     var index = 0
-    while (true) {
+    // Bound the number of blocks we walk through as well as the lines kept.
+    while (chunks.length < 64) {
       var at = page.indexOf(marker, index)
       if (at < 0) break
       var start = page.lastIndexOf("<div", at)
@@ -475,14 +529,14 @@ BarWidget {
     }
 
     var lines = []
-    for (var i = 0; i < chunks.length; i++) {
+    for (var i = 0; i < chunks.length && lines.length < lyricsLineLimit; i++) {
       var chunk = stripExcludedDivs(chunks[i])
       chunk = chunk.replace(/<br\s*\/?>/gi, "\n")
       chunk = chunk.replace(/<[^>]*>/g, "")
       chunk = decodeEntities(chunk)
 
       var rows = chunk.split("\n")
-      for (var j = 0; j < rows.length; j++) {
+      for (var j = 0; j < rows.length && lines.length < lyricsLineLimit; j++) {
         var line = rows[j].replace(/[ \t]+/g, " ").trim()
         if (line === "You might also like") continue
         if (line === "" && (lines.length === 0 || lines[lines.length - 1] === "")) continue
@@ -491,13 +545,13 @@ BarWidget {
     }
 
     while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop()
-    return lines.join("\n")
+    return lines.join("\n").slice(0, lyricsPlainLimit)
   }
 
   function handleGeniusPage(raw) {
     if (!lyricsLoading || geniusKey !== pendingLyricsKey) return
 
-    var plain = parseGeniusLyrics(String(raw || ""))
+    var plain = parseGeniusLyrics(String(raw || "").slice(0, geniusPageBytesLimit))
     if (plain === "") {
       geniusNoLyrics()
       return
@@ -505,7 +559,7 @@ BarWidget {
 
     var entry = { synced: false, lines: [], plain: plain, error: "", source: "Genius" }
     lyricsLoading = false
-    lyricsCache[geniusKey] = entry
+    cacheLyrics(geniusKey, entry)
     if (geniusKey === trackKey()) applyCache(entry)
   }
 
@@ -516,7 +570,7 @@ BarWidget {
     // Remember the miss for this track so reopening the popup does not hit
     // LRCLIB/Genius again until the track changes.
     var entry = { synced: false, lines: [], plain: "", error: "No lyrics found", source: "", instrumental: false }
-    if (geniusKey !== "") lyricsCache[geniusKey] = entry
+    if (geniusKey !== "") cacheLyrics(geniusKey, entry)
     if (geniusKey === trackKey()) applyCache(entry)
   }
 
@@ -590,6 +644,17 @@ BarWidget {
       resyncPosition()
       requestLyrics()
       Qt.callLater(root.refreshLyricIndex)
+    } else {
+      // Drop rendered lyrics while hidden: no delegates are created for a
+      // closed popup, and the cached entry is reapplied on the next open.
+      lyricsLines = []
+      lyricsPlain = ""
+      lyricsSynced = false
+      lyricsError = ""
+      lyricsInstrumental = false
+      lyricsSource = ""
+      currentLyricIndex = -1
+      lyricsScrolled = false
     }
   }
   onExpandedChanged: Qt.callLater(root.positionLyrics)
@@ -867,7 +932,7 @@ BarWidget {
       waitForEnd: true
       onStreamFinished: {
         if (!root.lyricsLoading) return
-        var raw = String(text || "").trim()
+        var raw = String(text || "").slice(0, root.lyricsBytesLimit).trim()
         var data = null
         if (raw !== "") {
           try { data = JSON.parse(raw) } catch (e) { data = null }

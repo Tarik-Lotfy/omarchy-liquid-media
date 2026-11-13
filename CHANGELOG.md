@@ -29,6 +29,13 @@ All notable changes to this plugin are documented here. The format follows
 - Round buttons center their glyph by painted ink instead of the font line box.
 - The close button moved to the top-right of the popup title row.
 
+### Security
+
+- Bound lyrics input and state: response size, scanned and kept rows, plain
+  text length, and the in-memory cache are all capped.
+- Genius lyric pages are only fetched from an `https` URL on `genius.com`, and
+  redirects are no longer followed.
+
 ### Fixed
 
 - Popup height and offsets stay correct when the bar window spans the screen.
