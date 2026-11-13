@@ -258,7 +258,12 @@ PanelWindow {
           source: root.artUrl
           fillMode: Image.PreserveAspectCrop
           asynchronous: true
-          cache: false
+          // Keep the decoded cover in Qt's shared pixmap cache. The popup
+          // surface is unmapped while closed, which drops the layer texture;
+          // without the cache a remote cover (e.g. Spotify's CDN) would be
+          // downloaded again on every open, so the glass would appear empty
+          // for a moment before the blurred art popped in.
+          cache: true
           smooth: true
           mipmap: true
           opacity: root.artOpacity
