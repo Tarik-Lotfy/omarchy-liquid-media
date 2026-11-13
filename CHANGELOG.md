@@ -44,6 +44,8 @@ All notable changes to this plugin are documented here. The format follows
 - The blurred album-art glass no longer reloads on every popup open: the cover
   stays in Qt's pixmap cache instead of being downloaded again each time the
   overlay surface is remapped.
+- Reopening the popup jumps straight to the current lyric line instead of
+  starting at the top and catching up on the next line change.
 
 ## [1.0.2] - 2026-11-05
 

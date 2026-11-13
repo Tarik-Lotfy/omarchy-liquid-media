@@ -598,7 +598,14 @@ BarWidget {
     if (lyricsFlick.dragging) return
 
     var item = lyricsRepeater.itemAt(currentLyricIndex)
-    if (!item) return
+    // The popup maps and the lyric delegates are laid out a frame or two after
+    // open, when the cached lines are reapplied. Jumping while the flickable or
+    // the target row still has no size clamps to the top, and the panel would
+    // only catch up on the next line change. Retry until the layout is real.
+    if (!item || item.height <= 0 || lyricsFlick.height <= 0 || lyricsFlick.contentHeight <= 0) {
+      lyricsPlaceRetry.arm()
+      return
+    }
 
     var target = item.y + item.height / 2 - lyricsFlick.height / 2
     var maxY = Math.max(0, lyricsFlick.contentHeight - lyricsFlick.height)
@@ -610,6 +617,7 @@ BarWidget {
       lyricsScrollAnim.stop()
       lyricsFlick.contentY = target
       lyricsScrolled = true
+      lyricsPlaceRetry.stop()
       return
     }
 
@@ -655,6 +663,7 @@ BarWidget {
       lyricsSource = ""
       currentLyricIndex = -1
       lyricsScrolled = false
+      lyricsPlaceRetry.stop()
     }
   }
   onExpandedChanged: Qt.callLater(root.positionLyrics)
@@ -874,6 +883,26 @@ BarWidget {
     id: lyricsStart
     interval: 10
     onTriggered: if (root.lyricsLoading && !lyricsProc.running) lyricsProc.running = true
+  }
+
+  // Re-runs the "jump to the current line" until the reopened popup has laid
+  // out its lyric rows. Bounded so a malformed entry cannot retry forever.
+  Timer {
+    id: lyricsPlaceRetry
+    interval: 16
+    repeat: true
+    property double deadline: 0
+    function arm() {
+      deadline = Date.now() + 1500
+      if (!running) start()
+    }
+    onTriggered: {
+      if (!root.popupOpen || root.lyricsScrolled || Date.now() > deadline) {
+        stop()
+        return
+      }
+      root.positionLyrics()
+    }
   }
 
   Timer {
@@ -1185,6 +1214,10 @@ BarWidget {
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                     onDraggingChanged: if (dragging) lyricsScrollAnim.stop()
+                    // The panel can finish laying out after the first jump
+                    // attempt; retry as soon as real sizes are available.
+                    onHeightChanged: if (!root.lyricsScrolled) root.positionLyrics()
+                    onContentHeightChanged: if (!root.lyricsScrolled) root.positionLyrics()
 
                     Column {
                       id: lyricsColumn
