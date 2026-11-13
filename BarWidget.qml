@@ -648,22 +648,16 @@ BarWidget {
   onTrackPositionChanged: refreshLyricIndex()
   onPopupOpenChanged: {
     if (popupOpen) {
+      lyricsClear.stop()
       lyricsScrolled = false
       resyncPosition()
       requestLyrics()
       Qt.callLater(root.refreshLyricIndex)
     } else {
-      // Drop rendered lyrics while hidden: no delegates are created for a
-      // closed popup, and the cached entry is reapplied on the next open.
-      lyricsLines = []
-      lyricsPlain = ""
-      lyricsSynced = false
-      lyricsError = ""
-      lyricsInstrumental = false
-      lyricsSource = ""
-      currentLyricIndex = -1
-      lyricsScrolled = false
-      lyricsPlaceRetry.stop()
+      // Let the close fade finish before dropping the rendered rows. Clearing
+      // immediately flips the panel to its "No lyrics found" placeholder for
+      // the length of the fade, so the user sees a flash after the lyrics.
+      lyricsClear.restart()
     }
   }
   onExpandedChanged: Qt.callLater(root.positionLyrics)
@@ -902,6 +896,25 @@ BarWidget {
         return
       }
       root.positionLyrics()
+    }
+  }
+
+  // Runs after the close fade so the panel keeps showing the current lyrics
+  // while it fades out instead of flipping to "No lyrics found".
+  Timer {
+    id: lyricsClear
+    interval: 220
+    onTriggered: {
+      if (root.popupOpen) return
+      root.lyricsLines = []
+      root.lyricsPlain = ""
+      root.lyricsSynced = false
+      root.lyricsError = ""
+      root.lyricsInstrumental = false
+      root.lyricsSource = ""
+      root.currentLyricIndex = -1
+      root.lyricsScrolled = false
+      lyricsPlaceRetry.stop()
     }
   }
 

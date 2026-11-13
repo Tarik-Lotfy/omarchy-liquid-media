@@ -46,6 +46,8 @@ All notable changes to this plugin are documented here. The format follows
   overlay surface is remapped.
 - Reopening the popup jumps straight to the current lyric line instead of
   starting at the top and catching up on the next line change.
+- Closing the popup keeps the lyrics visible through the fade instead of
+  flashing the "No lyrics found" placeholder.
 
 ## [1.0.2] - 2026-11-05
 
